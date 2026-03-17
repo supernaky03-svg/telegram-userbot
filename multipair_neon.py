@@ -1210,8 +1210,8 @@ async def initialize_runtime() -> None:
 async def main():
     logger.info("Bot startup initiated.")
 
-    keep_alive()
     await client.connect()
+    keep_alive()
     await login_flow()
     await initialize_runtime()
 
