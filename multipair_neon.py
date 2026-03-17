@@ -35,7 +35,7 @@ SESSION_STRING = (os.getenv("SESSION_STRING") or "").strip()
 if SESSION_STRING:
     client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 else:
-    client = TelegramClient(SESSION_NAME, API_ID, API_HASH))
+    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 DATABASE_URL = os.getenv("DATABASE_URL")
 LOG_FILE = os.getenv("LOG_FILE", "bot_log.txt")
 
