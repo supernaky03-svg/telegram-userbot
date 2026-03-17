@@ -1,0 +1,4 @@
+.env
+*.session
+user_data.json
+bot_log.txt
