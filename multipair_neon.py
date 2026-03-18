@@ -46,7 +46,7 @@ RECENT_IDS_LIMIT = int(os.getenv("RECENT_IDS_LIMIT", "100"))
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "3600"))
 LATEST_RECHECK_LIMIT = int(os.getenv("LATEST_RECHECK_LIMIT", "10"))
 KEEP_ALIVE_PORT = int(os.getenv("PORT", "10000"))
-
+INITIAL_SCAN_LIMIT = 50
 URL_REGEX = re.compile(r'(?i)\b(?:https?://|www\.|t\.me/)[^\s<>"\'\]\)]+' )
 
 if not API_ID or not API_HASH:
@@ -655,7 +655,6 @@ async def fetch_latest_message_id(source_entity) -> int:
         logger.exception("Failed to fetch latest message id.")
     return 0
 
-
 async def scan_pair(user_id: int, pair: Dict[str, Any]) -> None:
     pair_id = int(pair["pair_id"])
     runtime = get_pair_runtime(user_id, pair_id)
@@ -671,18 +670,32 @@ async def scan_pair(user_id: int, pair: Dict[str, Any]) -> None:
         current_latest_id = await fetch_latest_message_id(source_entity)
         logger.info("Current latest source message id for pair %s: %s", pair_id, current_latest_id)
 
-        if current_latest_id > last_processed_id:
-            grouped_map: Dict[int, List[Any]] = {}
+        grouped_map: Dict[int, List[Any]] = {}
 
-            async for msg in client.iter_messages(source_entity, min_id=last_processed_id, reverse=True):
+        if last_processed_id == 0:
+            # First run: only scan the latest INITIAL_SCAN_LIMIT posts
+            latest_msgs = await run_with_floodwait(client.get_messages, source_entity, limit=INITIAL_SCAN_LIMIT)
+            latest_msgs = sorted(latest_msgs, key=lambda x: x.id)
+
+            for msg in latest_msgs:
                 grouped_id = getattr(msg, "grouped_id", None)
                 if grouped_id:
                     grouped_map.setdefault(grouped_id, []).append(msg)
                 else:
                     await process_message_object(user_id, pair, msg)
+        else:
+            # Normal run: scan only missed messages after last_processed_id
+            if current_latest_id > last_processed_id:
+                async for msg in client.iter_messages(source_entity, min_id=last_processed_id, reverse=True):
+                    grouped_id = getattr(msg, "grouped_id", None)
+                    if grouped_id:
+                        grouped_map.setdefault(grouped_id, []).append(msg)
+                    else:
+                        await process_message_object(user_id, pair, msg)
 
-            for _, album_msgs in sorted(grouped_map.items(), key=lambda item: min(m.id for m in item[1])):
-                await process_album_object(user_id, pair, album_msgs)
+        for _, album_msgs in sorted(grouped_map.items(), key=lambda item: min(m.id for m in item[1])):
+            await process_album_object(user_id, pair, album_msgs)
+
     except Exception:
         logger.exception("Failed during missed messages scan for pair %s", pair_id)
 
