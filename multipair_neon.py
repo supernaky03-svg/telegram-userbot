@@ -673,8 +673,11 @@ async def scan_pair(user_id: int, pair: Dict[str, Any]) -> None:
         grouped_map: Dict[int, List[Any]] = {}
 
         if last_processed_id == 0:
-            # First run: only scan the latest INITIAL_SCAN_LIMIT posts
-            latest_msgs = await run_with_floodwait(client.get_messages, source_entity, limit=INITIAL_SCAN_LIMIT)
+            latest_msgs = await run_with_floodwait(
+                client.get_messages,
+                source_entity,
+                limit=INITIAL_SCAN_LIMIT
+            )
             latest_msgs = sorted(latest_msgs, key=lambda x: x.id)
 
             for msg in latest_msgs:
@@ -684,23 +687,33 @@ async def scan_pair(user_id: int, pair: Dict[str, Any]) -> None:
                 else:
                     await process_message_object(user_id, pair, msg)
         else:
-            # Normal run: scan only missed messages after last_processed_id
             if current_latest_id > last_processed_id:
-                async for msg in client.iter_messages(source_entity, min_id=last_processed_id, reverse=True):
+                async for msg in client.iter_messages(
+                    source_entity,
+                    min_id=last_processed_id,
+                    reverse=True
+                ):
                     grouped_id = getattr(msg, "grouped_id", None)
                     if grouped_id:
                         grouped_map.setdefault(grouped_id, []).append(msg)
                     else:
                         await process_message_object(user_id, pair, msg)
 
-        for _, album_msgs in sorted(grouped_map.items(), key=lambda item: min(m.id for m in item[1])):
+        for _, album_msgs in sorted(
+            grouped_map.items(),
+            key=lambda item: min(m.id for m in item[1])
+        ):
             await process_album_object(user_id, pair, album_msgs)
 
     except Exception:
         logger.exception("Failed during missed messages scan for pair %s", pair_id)
 
     try:
-        latest_msgs = await run_with_floodwait(client.get_messages, source_entity, limit=LATEST_RECHECK_LIMIT)
+        latest_msgs = await run_with_floodwait(
+            client.get_messages,
+            source_entity,
+            limit=LATEST_RECHECK_LIMIT
+        )
         latest_msgs = sorted(latest_msgs, key=lambda x: x.id)
 
         grouped_map_10: Dict[int, List[Any]] = {}
@@ -711,13 +724,15 @@ async def scan_pair(user_id: int, pair: Dict[str, Any]) -> None:
             else:
                 await process_message_object(user_id, pair, msg)
 
-        for _, album_msgs in sorted(grouped_map_10.items(), key=lambda item: min(m.id for m in item[1])):
+        for _, album_msgs in sorted(
+            grouped_map_10.items(),
+            key=lambda item: min(m.id for m in item[1])
+        ):
             await process_album_object(user_id, pair, album_msgs)
 
         logger.info("Latest %s recheck completed for pair %s", LATEST_RECHECK_LIMIT, pair_id)
     except Exception:
         logger.exception("Failed latest recheck for pair %s", pair_id)
-
 
 async def scan_all_pairs(user_id: int) -> None:
     record = ensure_user_record(user_id)
