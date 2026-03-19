@@ -537,23 +537,32 @@ async def repost_single_message(user_id: int, pair: Dict[str, Any], msg) -> List
     pair_id = int(pair["pair_id"])
     runtime = get_pair_runtime(user_id, pair_id)
     target_entity = runtime["target_entity"]
-    
-    # Ads link ကို database/pair ထဲမှယူသည် (မရှိလျှင် string အလွတ်)
+
+    # --- ဒုတိယ Code ရဲ့ အားသာချက် (စစ်ဆေးမှုများ) ---
+    if should_skip_forwarded(pair, msg):
+        return []
+    if not pair_matches_filters(pair, msg):
+        return []
+    if is_duplicate(pair, msg.id):
+        return []
+
+    # --- ပထမ Code ရဲ့ အားသာချက် (Link Clean & Ads) ---
     ads_link = pair.get("ads_link", "") 
-    
-    # Link ဖျက်ပြီး Ads ထည့်ခြင်း
-    final_caption = clean_and_add_ads(msg.text or "", ads_link)
+    final_text = clean_and_add_ads(msg.text or "", ads_link)
 
     try:
-        sent_msg = await client.send_message(
-            target_entity,
-            final_caption,
-            file=msg.media,
-            parse_mode='html'
-        )
-        return [sent_msg.id]
+        # --- ဒုတိယ Code ရဲ့ အားသာချက် (တည်ငြိမ်သော Safe Send သုံးခြင်း) ---
+        if msg.media:
+            await safe_send_file(target_entity, msg.media, caption=final_text if final_text else None)
+        elif final_text:
+            await safe_send_message(target_entity, final_text)
+        else:
+            # စာသားလည်းမရှိ၊ မီဒီယာလည်းမရှိလျှင် ကျော်မည်
+            return []
+            
+        return [msg.id]
     except Exception:
-        logger.exception("Failed to repost message")
+        logger.exception(f"Failed to repost message {msg.id}")
         return []
 
 async def repost_album(user_id: int, pair: Dict[str, Any], album_messages: List[Any]) -> List[int]:
