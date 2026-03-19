@@ -774,20 +774,38 @@ def format_status(user_id: int) -> str:
 async def start_command_handler(event):
     await send_self_reply(
         event.chat_id,
-        "Owner commands:\n\n"
-        "/addpair <source> <target>\n"
-        "/listpairs\n"
-        "/deletepair <id>\n"
-        "/check\n"
-        "/check <id>\n"
-        "/ads <id> <link>\n"
-        "/showads <id>\n"
-        "/clearads <id>\n"
-        "/forward_rule <on/off> <id>\n"
-        "/post_rule <on/off> <id>\n"
-        "/status"
+        "Multi-pair userbot is running.\n\n"
+        "Use /help for usage."
     )
 
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/help$"))
+async def help_command_handler(event):
+    await send_self_reply(
+        event.chat_id,
+        "Available commands:\n\n"
+        "/start - short bot status message\n"
+        "/help - show this help message\n"
+        "/addpair <source> <target> - add a new source/target pair\n"
+        "/editA <id> <new_source> - change source channel for a pair\n"
+        "/editB <id> <new_target> - change target channel for a pair\n"
+        "/listpairs - show all configured pairs\n"
+        "/status - show pair status summary\n"
+        "/deletepair <id> - delete one pair\n"
+        "/check - scan all pairs now\n"
+        "/check <id> - scan one pair now\n"
+        "/ads <id> <link> - set ads link for a pair\n"
+        "/showads <id> - show current ads link\n"
+        "/clearads <id> - clear ads link\n"
+        "/forward_rule <on/off> <id> - forwarded message rule\n"
+        "/post_rule <on/off> <id> - keyword filter rule\n\n"
+        "Examples:\n"
+        "/addpair https://t.me/source1 https://t.me/target1\n"
+        "/editA 2 https://t.me/newsource\n"
+        "/editB 2 https://t.me/newtarget\n"
+        "/ads 1 https://example.com\n"
+        "/forward_rule on 1\n"
+        "/post_rule off 1\n"
+        "/check 1"
 
 @client.on(events.NewMessage(outgoing=True, pattern=r"^/addpair\s+(\S+)\s+(\S+)$"))
 async def addpair_handler(event):
@@ -834,6 +852,56 @@ async def deletepair_handler(event):
     delete_pair_from_db(account_user_id, pair_id)
     runtime_cache.get(str(account_user_id), {}).pop(str(pair_id), None)
     await send_self_reply(event.chat_id, f"Pair {pair_id} deleted.")
+
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/editA\s+(\d+)\s+(\S+)$"))
+async def edit_a_command_handler(event):
+    pair_id = int(event.pattern_match.group(1))
+    new_source = event.pattern_match.group(2).strip()
+
+    pair = get_pair_by_id(pair_id)
+    if not pair:
+        await send_self_reply(event.chat_id, f"Pair {pair_id} not found.")
+        return
+
+    try:
+        await safe_get_entity(new_source)
+    except Exception:
+        await send_self_reply(event.chat_id, "Invalid or inaccessible Channel A / source link.")
+        return
+
+    pair["source_id"] = new_source
+    pair["last_processed_id"] = 0
+    pair["recent_sent_ids"] = []
+    save_pair(pair)
+
+    await send_self_reply(
+        event.chat_id,
+        f"Pair {pair_id} Channel A updated.\n\nNew source: {new_source}"
+    )
+
+@client.on(events.NewMessage(outgoing=True, pattern=r"^/editB\s+(\d+)\s+(\S+)$"))
+async def edit_b_command_handler(event):
+    pair_id = int(event.pattern_match.group(1))
+    new_target = event.pattern_match.group(2).strip()
+
+    pair = get_pair_by_id(pair_id)
+    if not pair:
+        await send_self_reply(event.chat_id, f"Pair {pair_id} not found.")
+        return
+
+    try:
+        await safe_get_entity(new_target)
+    except Exception:
+        await send_self_reply(event.chat_id, "Invalid or inaccessible Channel B / target link.")
+        return
+
+    pair["target_id"] = new_target
+    save_pair(pair)
+
+    await send_self_reply(
+        event.chat_id,
+        f"Pair {pair_id} Channel B updated.\n\nNew target: {new_target}"
+    )
 
 
 @client.on(events.NewMessage(outgoing=True, pattern=r"^/ads\s+(\d+)\s+(.+)$"))
