@@ -39,13 +39,6 @@ LATEST_RECHECK_LIMIT = int(os.getenv("LATEST_RECHECK_LIMIT", "10"))
 RECENT_IDS_LIMIT = int(os.getenv("RECENT_IDS_LIMIT", "100"))
 
 # Simple keyword list for post_rule=ON
-KEYWORDS = [
-    "promo",
-    "sale",
-    "offer",
-    "discount",
-    "join",
-]
 
 URL_REGEX = re.compile(r'(?i)\b(?:https?://|www\.|t\.me/)[^\s<>"\'\]\)]+' )
 
@@ -310,21 +303,29 @@ def is_video_message(msg) -> bool:
 
 
 def pair_matches_filters(pair: Dict[str, Any], msg) -> bool:
-    # post_rule OFF => post everything (subject to forward_rule)
-    if not bool(pair.get("post_rule", True)):
+    # forward_rule ON => skip forwarded
+    if pair.get("forward_rule", False) and is_forwarded(msg):
+        return False
+
+    # post_rule OFF => allow everything else
+    if not pair.get("post_rule", True):
         return True
 
-    text = message_text_for_filter(msg)
-    if any(keyword.lower() in text for keyword in KEYWORDS):
-        return True
-    return False
+    # post_rule ON => only video messages pass directly
+    return is_video_message(msg)
 
 
 def pair_album_matches_filters(pair: Dict[str, Any], album_messages: List[Any]) -> bool:
-    if not bool(pair.get("post_rule", True)):
+    # forward_rule ON => skip forwarded albums
+    if pair.get("forward_rule", False) and any(is_forwarded(m) for m in album_messages):
+        return False
+
+    # post_rule OFF => allow every album
+    if not pair.get("post_rule", True):
         return True
-    joined = "\n".join(message_text_for_filter(m) for m in album_messages)
-    return any(keyword.lower() in joined for keyword in KEYWORDS)
+
+    # post_rule ON => only albums containing video
+    return any(is_video_message(m) for m in album_messages)
 
 
 def should_skip_forwarded(pair: Dict[str, Any], msg) -> bool:
@@ -599,6 +600,7 @@ async def repost_album(user_id: int, pair: Dict[str, Any], album_messages: List[
 async def process_message_object(user_id: int, pair: Dict[str, Any], msg) -> None:
     pair_id = int(pair["pair_id"])
     runtime = get_pair_runtime(user_id, pair_id)
+
     if runtime["source_entity"] is None or runtime["target_entity"] is None:
         return
 
@@ -608,14 +610,38 @@ async def process_message_object(user_id: int, pair: Dict[str, Any], msg) -> Non
                 update_last_processed(user_id, pair, msg.id)
                 return
 
+            # post_rule OFF => post every single message
+            if not pair.get("post_rule", True):
+                await apply_human_delay(user_id, pair_id)
+
+                sent_ids = await repost_single_message(user_id, pair, msg)
+                if sent_ids:
+                    mark_sent_ids(user_id, pair, sent_ids)
+                    mark_action_done(user_id, pair_id)
+
+                update_last_processed(user_id, pair, msg.id)
+                return
+
+            # post_rule ON => only video trigger mode
+            if not is_video_message(msg):
+                update_last_processed(user_id, pair, msg.id)
+                return
+
             await apply_human_delay(user_id, pair_id)
-            sent_ids = await repost_single_message(user_id, pair, msg)
+
+            sent_ids = await repost_single_video_message(user_id, pair, msg)
             if sent_ids:
                 mark_sent_ids(user_id, pair, sent_ids)
                 mark_action_done(user_id, pair_id)
+
             update_last_processed(user_id, pair, msg.id)
+
         except Exception:
-            logger.exception("Unexpected error while processing message %s for pair %s", getattr(msg, "id", "unknown"), pair_id)
+            logger.exception(
+                "Unexpected error while processing message %s pair %s",
+                getattr(msg, "id", "unknown"),
+                pair_id,
+            )
             update_last_processed(user_id, pair, getattr(msg, "id", 0))
 
 
@@ -625,25 +651,53 @@ async def process_album_object(user_id: int, pair: Dict[str, Any], album_message
 
     pair_id = int(pair["pair_id"])
     runtime = get_pair_runtime(user_id, pair_id)
-    highest_id = max(m.id for m in album_messages)
+
+    album_messages = sorted(album_messages, key=lambda x: x.id)
+    highest_id = album_messages[-1].id
 
     async with runtime["lock"]:
         try:
             grouped_id = getattr(album_messages[0], "grouped_id", None)
-            seen_groups = runtime["processed_grouped_ids_live"]
-            if grouped_id in seen_groups:
+            if grouped_id is not None:
+                seen_groups = runtime["processed_grouped_ids_live"]
+                if grouped_id in seen_groups:
+                    update_last_processed(user_id, pair, highest_id)
+                    return
+                seen_groups.add(grouped_id)
+
+            # post_rule OFF => allow every album
+            if not pair.get("post_rule", True):
+                await apply_human_delay(user_id, pair_id)
+
+                sent_ids = await repost_album(user_id, pair, album_messages)
+                if sent_ids:
+                    mark_sent_ids(user_id, pair, sent_ids)
+                    mark_action_done(user_id, pair_id)
+
                 update_last_processed(user_id, pair, highest_id)
                 return
-            seen_groups.add(grouped_id)
+
+            # post_rule ON => only albums containing video
+            has_video = any(is_video_message(m) for m in album_messages)
+            if not has_video:
+                update_last_processed(user_id, pair, highest_id)
+                return
 
             await apply_human_delay(user_id, pair_id)
+
             sent_ids = await repost_album(user_id, pair, album_messages)
             if sent_ids:
                 mark_sent_ids(user_id, pair, sent_ids)
                 mark_action_done(user_id, pair_id)
+
             update_last_processed(user_id, pair, highest_id)
+
         except Exception:
-            logger.exception("Unexpected error while processing album for pair %s", pair_id)
+            logger.exception(
+                "Unexpected error while processing album grouped_id=%s pair %s",
+                getattr(album_messages[0], "grouped_id", None),
+                pair_id,
+            )
             update_last_processed(user_id, pair, highest_id)
 
 
@@ -800,8 +854,7 @@ async def help_command_handler(event):
         "/showads <id> - show current ads link\n"
         "/clearads <id> - clear ads link\n"
         "/forward_rule <on/off> <id> - forwarded message rule\n"
-        "/post_rule <on/off> <id> - keyword filter rule\n\n"
-        "Examples:\n"
+        "/post_rule <on/off> <id> - on = video + preview only, off = post everything\n"
         "/addpair https://t.me/source1 https://t.me/target1\n"
         "/editA 2 https://t.me/newsource\n"
         "/editB 2 https://t.me/newtarget\n"
