@@ -606,43 +606,53 @@ async def process_message_object(user_id: int, pair: Dict[str, Any], msg) -> Non
 
     async with runtime["lock"]:
         try:
+            # ၁။ Album (Grouped ID) ပါရင် ခဏကျော်မယ် (Album handler က သီးသန့်လုပ်မှာမိုလို)
             if getattr(msg, "grouped_id", None):
                 update_last_processed(user_id, pair, msg.id)
                 return
 
-            # post_rule OFF => post every single message
-            if not pair.get("post_rule", True):
-                await apply_human_delay(user_id, pair_id)
+            # ၂။ Post Rule logic စစ်မယ်
+            is_video = is_video_message(msg)
+            
+            # post_rule OFF ထားရင် အကုန်တင်မယ်
+            # post_rule ON ထားရင် video ဖြစ်မှ အလုပ်လုပ်မယ်
+            should_process = not pair.get("post_rule", True) or is_video
 
+            if should_process:
+                # Video ဖြစ်ခဲ့ရင် အရင်တင်မယ်
+                await apply_human_delay(user_id, pair_id)
+                # မူရင်းကုဒ်က error 'repost_single_video_message' ကို 'repost_single_message' လို ပြင်ထားပါတယ်
                 sent_ids = await repost_single_message(user_id, pair, msg)
+                
                 if sent_ids:
                     mark_sent_ids(user_id, pair, sent_ids)
                     mark_action_done(user_id, pair_id)
 
-                update_last_processed(user_id, pair, msg.id)
-                return
+                # --- Video ရဲ့ အပေါ်က post ကို တွဲတင်ပေးမယ့် အပိုင်း ---
+                if pair.get("post_rule", True) and is_video:
+                    prev_msg_id = msg.id - 1
+                    try:
+                        # client ကို global အနေနဲ့ ခေါ်သုံးမယ်
+                        from main import client 
+                        prev_msg = await client.get_messages(runtime["source_entity"], ids=prev_msg_id)
+                        
+                        # post ရှိမရှိနဲ့ duplicate ဟုတ်မဟုတ်စစ်မယ်
+                        if prev_msg and not is_duplicate(pair, prev_msg.id):
+                            # Album မဟုတ်မှ တင်မယ် (Logic ရှုပ်ထွေးမှု မဖြစ်အောင်)
+                            if not getattr(prev_msg, "grouped_id", None):
+                                await apply_human_delay(user_id, pair_id)
+                                p_sent = await repost_single_message(user_id, pair, prev_msg)
+                                if p_sent:
+                                    mark_sent_ids(user_id, pair, p_sent)
+                                    mark_action_done(user_id, pair_id)
+                    except Exception as e:
+                        logger.debug(f"Previous message {prev_msg_id} not found or skipped: {e}")
 
-            # post_rule ON => only video trigger mode
-            if not is_video_message(msg):
-                update_last_processed(user_id, pair, msg.id)
-                return
-
-            await apply_human_delay(user_id, pair_id)
-
-            sent_ids = await repost_single_message(user_id, pair, msg)
-            if sent_ids:
-                mark_sent_ids(user_id, pair, sent_ids)
-                mark_action_done(user_id, pair_id)
-
+            # အလုပ်ပြီးရင် last processed ကို update လုပ်မယ်
             update_last_processed(user_id, pair, msg.id)
 
-        except Exception:
-            logger.exception(
-                "Unexpected error while processing message %s pair %s",
-                getattr(msg, "id", "unknown"),
-                pair_id,
-            )
-            update_last_processed(user_id, pair, getattr(msg, "id", 0))
+        except Exception as e:
+            logger.error(f"Error in process_message_object: {e}")
 
 
 async def process_album_object(user_id: int, pair: Dict[str, Any], album_messages: List[Any]) -> None:
