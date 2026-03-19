@@ -859,7 +859,7 @@ async def edit_a_command_handler(event):
     pair_id = int(event.pattern_match.group(1))
     new_source = event.pattern_match.group(2).strip()
 
-    pair = get_pair_by_id(pair_id)
+    pair = get_pair_by_id(account_user_id, pair_id)
     if not pair:
         await send_self_reply(event.chat_id, f"Pair {pair_id} not found.")
         return
@@ -873,7 +873,7 @@ async def edit_a_command_handler(event):
     pair["source_id"] = new_source
     pair["last_processed_id"] = 0
     pair["recent_sent_ids"] = []
-    save_pair(pair)
+    save_pair(account_user_id, pair)
 
     await send_self_reply(
         event.chat_id,
@@ -885,7 +885,7 @@ async def edit_b_command_handler(event):
     pair_id = int(event.pattern_match.group(1))
     new_target = event.pattern_match.group(2).strip()
 
-    pair = get_pair_by_id(pair_id)
+    pair = get_pair_by_id(account_user_id, pair_id)
     if not pair:
         await send_self_reply(event.chat_id, f"Pair {pair_id} not found.")
         return
@@ -897,7 +897,7 @@ async def edit_b_command_handler(event):
         return
 
     pair["target_id"] = new_target
-    save_pair(pair)
+    save_pair(account_user_id, pair)
 
     await send_self_reply(
         event.chat_id,
