@@ -629,7 +629,7 @@ async def process_message_object(user_id: int, pair: Dict[str, Any], msg) -> Non
 
             await apply_human_delay(user_id, pair_id)
 
-            sent_ids = await repost_single_video_message(user_id, pair, msg)
+            sent_ids = await repost_single_message(user_id, pair, msg)
             if sent_ids:
                 mark_sent_ids(user_id, pair, sent_ids)
                 mark_action_done(user_id, pair_id)
