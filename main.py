@@ -96,6 +96,25 @@ account_user_id: int = 0
 user_data: Dict[str, Dict[str, Any]] = {}
 runtime_cache: Dict[str, Dict[str, Any]] = {}
 
+
+def clean_and_add_ads(text: str, ads_text: str = None) -> str:
+    if not text:
+        return ""
+    
+    # URL များကို ရှာဖွေဖျက်ဆီးမည့် Regex (t.me လင့်ခ်များပါဝင်သည်)
+    url_pattern = r'https?://\S+|www\.\S+|t\.me/\S+'
+    clean_text = re.sub(url_pattern, '', text)
+    clean_text = clean_text.strip()
+    
+    # Ads link ရှိလျှင် အောက်ဆုံးတွင် ထပ်ပေါင်းမည်
+    if ads_text and ads_text.strip():
+        if clean_text:
+            clean_text += f"\n\n{ads_text.strip()}"
+        else:
+            clean_text = ads_text.strip()
+            
+    return clean_text
+
 # =========================================================
 # DB HELPERS (NEON / POSTGRES)
 # =========================================================
@@ -518,36 +537,24 @@ async def repost_single_message(user_id: int, pair: Dict[str, Any], msg) -> List
     pair_id = int(pair["pair_id"])
     runtime = get_pair_runtime(user_id, pair_id)
     target_entity = runtime["target_entity"]
-
-    if should_skip_forwarded(pair, msg):
-        logger.info("Skipping forwarded message %s for pair %s due to forward_rule", msg.id, pair_id)
-        return []
-
-    if not pair_matches_filters(pair, msg):
-        logger.info("Skipping message %s for pair %s due to post_rule filter", msg.id, pair_id)
-        return []
-
-    if is_duplicate(pair, msg.id):
-        logger.info("Skipping duplicate message %s for pair %s", msg.id, pair_id)
-        return []
+    
+    # Ads link ကို database/pair ထဲမှယူသည် (မရှိလျှင် string အလွတ်)
+    ads_link = pair.get("ads_link", "") 
+    
+    # Link ဖျက်ပြီး Ads ထည့်ခြင်း
+    final_caption = clean_and_add_ads(msg.text or "", ads_link)
 
     try:
-        if msg.media:
-            caption = build_single_caption(pair, msg)
-            await safe_send_file(target_entity, msg.media, caption=caption if caption else None)
-        else:
-            text = build_single_text(pair, msg)
-            if text:
-                await safe_send_message(target_entity, text)
-            else:
-                logger.info("Message %s became empty after cleaning for pair %s", msg.id, pair_id)
-                return []
-        logger.info("Reposted single message %s for pair %s", msg.id, pair_id)
-        return [msg.id]
+        sent_msg = await client.send_message(
+            target_entity,
+            final_caption,
+            file=msg.media,
+            parse_mode='html'
+        )
+        return [sent_msg.id]
     except Exception:
-        logger.exception("Failed to repost single message %s for pair %s", msg.id, pair_id)
+        logger.exception("Failed to repost message")
         return []
-
 
 async def repost_album(user_id: int, pair: Dict[str, Any], album_messages: List[Any]) -> List[int]:
     if not album_messages:
