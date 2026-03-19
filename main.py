@@ -238,9 +238,12 @@ def ensure_user_record(user_id: int) -> Dict[str, Any]:
 
 def next_pair_id(record: Dict[str, Any]) -> int:
     pairs = record.get("pairs", [])
-    if not pairs:
-        return 1
-    return max(int(p.get("pair_id", 0)) for p in pairs) + 1
+    used_ids = {int(p.get("pair_id", 0)) for p in pairs if int(p.get("pair_id", 0)) > 0}
+
+    new_id = 1
+    while new_id in used_ids:
+        new_id += 1
+    return new_id
 
 
 def get_pair_by_id(user_id: int, pair_id: int) -> Optional[Dict[str, Any]]:
