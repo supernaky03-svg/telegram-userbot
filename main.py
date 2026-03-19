@@ -806,6 +806,7 @@ async def help_command_handler(event):
         "/forward_rule on 1\n"
         "/post_rule off 1\n"
         "/check 1"
+    )
 
 @client.on(events.NewMessage(outgoing=True, pattern=r"^/addpair\s+(\S+)\s+(\S+)$"))
 async def addpair_handler(event):
