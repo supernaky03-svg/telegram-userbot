@@ -100,19 +100,21 @@ runtime_cache: Dict[str, Dict[str, Any]] = {}
 def clean_and_add_ads(text: str, ads_text: str = None) -> str:
     if not text:
         return ""
-    
-    # URL များကို ရှာဖွေဖျက်ဆီးမည့် Regex (t.me လင့်ခ်များပါဝင်သည်)
-    url_pattern = r'https?://\S+|www\.\S+|t\.me/\S+'
-    clean_text = re.sub(url_pattern, '', text)
+
+    link_pattern = r'(https?://\S+|www\.\S+|(?:https?://)?(?:t\.me|telegram\.me)/\S+|tg://\S+)'
+    username_pattern = r'(?<!\w)@[A-Za-z][A-Za-z0-9_]{4,31}\b'
+
+    clean_text = re.sub(link_pattern, '', text, flags=re.IGNORECASE)
+    clean_text = re.sub(username_pattern, '', clean_text)
+
     clean_text = clean_text.strip()
-    
-    # Ads link ရှိလျှင် အောက်ဆုံးတွင် ထပ်ပေါင်းမည်
+
     if ads_text and ads_text.strip():
         if clean_text:
             clean_text += f"\n\n{ads_text.strip()}"
         else:
             clean_text = ads_text.strip()
-            
+
     return clean_text
 
 # =========================================================
