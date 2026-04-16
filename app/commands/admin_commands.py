@@ -72,7 +72,7 @@ async def live_new_message_handler(event):
             await process_message_object(state.account_user_id, pair, msg)
 
 
-@client.on(events.Album(incoming=True))
+@client.on(events.Album)
 async def live_album_handler(event):
     if not state.account_user_id:
         return
