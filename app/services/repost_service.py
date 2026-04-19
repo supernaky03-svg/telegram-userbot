@@ -48,6 +48,7 @@ async def apply_human_delay() -> None:
     high = max(DELAY_MIN_SECONDS, DELAY_MAX_SECONDS)
     if high <= 0:
         return
+
     delay = random.randint(low, high) if high > low else high
     if delay > 0:
         logger.info("Sleeping %s seconds before send", delay)
@@ -59,7 +60,12 @@ def mark_action_done(user_id: int, pair: Dict[str, Any], msg_ids: List[int]) -> 
     update_last_processed(user_id, pair, max(msg_ids))
 
 
-async def repost_single_message(user_id: int, pair: Dict[str, Any], msg) -> bool:
+async def repost_single_message(
+    user_id: int,
+    pair: Dict[str, Any],
+    msg,
+    bypass_post_rule: bool = False,
+) -> bool:
     pair_id = int(pair["pair_id"])
     runtime = get_pair_runtime(user_id, pair_id)
     target_entity = runtime["target_entity"]
@@ -68,15 +74,28 @@ async def repost_single_message(user_id: int, pair: Dict[str, Any], msg) -> bool
         return False
 
     msg_id = int(msg.id)
+
     if is_duplicate(pair, msg_id):
         logger.info("Skipping duplicate message %s for pair %s", msg_id, pair_id)
         update_last_processed(user_id, pair, msg_id)
         return False
 
-    if not pair_matches_filters(pair, msg):
-        logger.info("Skipping message %s for pair %s due to filters", msg_id, pair_id)
-        update_last_processed(user_id, pair, msg_id)
-        return False
+    if not bypass_post_rule:
+        if not pair_matches_filters(pair, msg):
+            logger.info("Skipping message %s for pair %s due to filters", msg_id, pair_id)
+            update_last_processed(user_id, pair, msg_id)
+            return False
+    else:
+        # preview post အတွက် post_rule / keyword filter မစစ်ဘူး
+        # forward_rule ON + forwarded ဖြစ်တာပဲ skip လုပ်မယ်
+        if should_skip_forwarded(pair, msg):
+            logger.info(
+                "Skipping preview message %s for pair %s because it is forwarded",
+                msg_id,
+                pair_id,
+            )
+            update_last_processed(user_id, pair, msg_id)
+            return False
 
     await apply_human_delay()
 
@@ -96,7 +115,12 @@ async def repost_single_message(user_id: int, pair: Dict[str, Any], msg) -> bool
     return True
 
 
-async def repost_album(user_id: int, pair: Dict[str, Any], album_messages: List[Any]) -> bool:
+async def repost_album(
+    user_id: int,
+    pair: Dict[str, Any],
+    album_messages: List[Any],
+    bypass_post_rule: bool = False,
+) -> bool:
     pair_id = int(pair["pair_id"])
     runtime = get_pair_runtime(user_id, pair_id)
     target_entity = runtime["target_entity"]
@@ -113,46 +137,77 @@ async def repost_album(user_id: int, pair: Dict[str, Any], album_messages: List[
         return False
 
     if any(is_duplicate(pair, mid) for mid in msg_ids):
-        logger.info("Skipping album %s for pair %s because one or more items already sent", grouped_id, pair_id)
+        logger.info(
+            "Skipping album %s for pair %s because one or more items already sent",
+            grouped_id,
+            pair_id,
+        )
         update_last_processed(user_id, pair, max(msg_ids))
         return False
 
-    if not pair_album_matches_filters(pair, album_messages):
-        logger.info("Skipping album %s for pair %s due to filters", grouped_id, pair_id)
-        update_last_processed(user_id, pair, max(msg_ids))
-        return False
+    if not bypass_post_rule:
+        if not pair_album_matches_filters(pair, album_messages):
+            logger.info("Skipping album %s for pair %s due to filters", grouped_id, pair_id)
+            update_last_processed(user_id, pair, max(msg_ids))
+            return False
+    else:
+        # preview album အတွက် post_rule / keyword filter မစစ်ဘူး
+        # forward_rule ON + forwarded ပါရင်ပဲ skip
+        if should_skip_album_forwarded(pair, album_messages):
+            logger.info(
+                "Skipping preview album %s for pair %s because it is forwarded",
+                grouped_id,
+                pair_id,
+            )
+            update_last_processed(user_id, pair, max(msg_ids))
+            return False
 
-    if pair.get("post_rule", True):
+    if pair.get("post_rule", True) and not bypass_post_rule:
         files = []
         captions = []
+
         for msg, caption in zip(album_messages, build_album_captions(pair, album_messages)):
             if is_video_message(msg) and msg.media:
                 files.append(msg.media)
                 captions.append(caption or "")
+
         if not files:
-            logger.info("Skipping album %s for pair %s because post_rule=ON and no video items found", grouped_id, pair_id)
+            logger.info(
+                "Skipping album %s for pair %s because post_rule=ON and no video items found",
+                grouped_id,
+                pair_id,
+            )
             update_last_processed(user_id, pair, max(msg_ids))
             return False
     else:
+        # preview album OR post_rule OFF => media အားလုံးတင်
         files = [m.media for m in album_messages if m.media]
         captions = build_album_captions(pair, album_messages)
-        if not files:
-            text_parts = [c for c in captions if c]
-            text = "\n\n".join(text_parts).strip()
-            if not text:
-                logger.info("Skipping media-less album %s for pair %s", grouped_id, pair_id)
-                update_last_processed(user_id, pair, max(msg_ids))
-                return False
-            await apply_human_delay()
-            await safe_send_message(target_entity, text)
+
+    if not files:
+        text_parts = [c for c in captions if c]
+        text = "\n\n".join(text_parts).strip()
+
+        if not text:
+            logger.info("Skipping media-less album %s for pair %s", grouped_id, pair_id)
+            update_last_processed(user_id, pair, max(msg_ids))
+            return False
+
+        await apply_human_delay()
+        await safe_send_message(target_entity, text)
+
+        if grouped_id is not None:
             runtime["last_sent_grouped_ids"].add(grouped_id)
-            mark_action_done(user_id, pair, msg_ids)
-            return True
+
+        mark_action_done(user_id, pair, msg_ids)
+        return True
 
     await apply_human_delay()
     await safe_send_album(target_entity, files, captions)
+
     if grouped_id is not None:
         runtime["last_sent_grouped_ids"].add(grouped_id)
+
     logger.info("Reposted album %s for pair %s", grouped_id, pair_id)
     mark_action_done(user_id, pair, msg_ids)
     return True
@@ -177,6 +232,7 @@ async def collect_grouped_album_messages(source_entity, msg) -> List[Any]:
 async def repost_preview_for_video(user_id: int, pair: Dict[str, Any], msg) -> None:
     if not pair.get("post_rule", True):
         return
+
     if not is_video_message(msg):
         return
 
@@ -194,23 +250,34 @@ async def repost_preview_for_video(user_id: int, pair: Dict[str, Any], msg) -> N
         return
 
     if getattr(previous_msg, "grouped_id", None):
-        album = await collect_grouped_album_messages(source_entity, previous_msg)
-        if should_skip_album_forwarded(pair, album):
+        preview_album = await collect_grouped_album_messages(source_entity, previous_msg)
+
+        if should_skip_album_forwarded(pair, preview_album):
             return
-        if any(is_duplicate(pair, int(m.id)) for m in album):
+
+        if any(is_duplicate(pair, int(m.id)) for m in preview_album):
             return
-        if not any(not is_video_message(m) for m in album):
-            return
-        await repost_album(user_id, pair, album)
+
+        await repost_album(
+            user_id,
+            pair,
+            preview_album,
+            bypass_post_rule=True,
+        )
         return
 
     if should_skip_forwarded(pair, previous_msg):
         return
+
     if is_duplicate(pair, int(previous_msg.id)):
         return
-    if is_video_message(previous_msg):
-        return
-    await repost_single_message(user_id, pair, previous_msg)
+
+    await repost_single_message(
+        user_id,
+        pair,
+        previous_msg,
+        bypass_post_rule=True,
+    )
 
 
 async def process_message_object(user_id: int, pair: Dict[str, Any], msg) -> None:
@@ -220,6 +287,7 @@ async def process_message_object(user_id: int, pair: Dict[str, Any], msg) -> Non
     async with runtime["lock"]:
         if pair_has_pending_initial_scan(pair):
             return
+
         resolved = runtime["source_entity"] is not None and runtime["target_entity"] is not None
         if not resolved:
             resolved = await resolve_pair_entities(user_id, pair)
@@ -247,6 +315,7 @@ async def process_album_object(user_id: int, pair: Dict[str, Any], album_message
     async with runtime["lock"]:
         if pair_has_pending_initial_scan(pair):
             return
+
         resolved = runtime["source_entity"] is not None and runtime["target_entity"] is not None
         if not resolved:
             resolved = await resolve_pair_entities(user_id, pair)
@@ -263,9 +332,28 @@ async def process_album_object(user_id: int, pair: Dict[str, Any], album_message
                 prev_id = int(min(m.id for m in album_messages)) - 1
                 if prev_id > 0:
                     prev_msg = await safe_get_message(runtime["source_entity"], prev_id)
-                    if prev_msg and not getattr(prev_msg, "grouped_id", None):
-                        if not should_skip_forwarded(pair, prev_msg) and not is_video_message(prev_msg):
-                            if not is_duplicate(pair, int(prev_msg.id)):
-                                await repost_single_message(user_id, pair, prev_msg)
+                    if prev_msg:
+                        if getattr(prev_msg, "grouped_id", None):
+                            preview_album = await collect_grouped_album_messages(
+                                runtime["source_entity"],
+                                prev_msg,
+                            )
+                            if not should_skip_album_forwarded(pair, preview_album):
+                                if not any(is_duplicate(pair, int(m.id)) for m in preview_album):
+                                    await repost_album(
+                                        user_id,
+                                        pair,
+                                        preview_album,
+                                        bypass_post_rule=True,
+                                    )
+                        else:
+                            if not should_skip_forwarded(pair, prev_msg):
+                                if not is_duplicate(pair, int(prev_msg.id)):
+                                    await repost_single_message(
+                                        user_id,
+                                        pair,
+                                        prev_msg,
+                                        bypass_post_rule=True,
+                                    )
 
         await repost_album(user_id, pair, album_messages)
