@@ -11,6 +11,8 @@ from ..utils.filters import (
     is_video_message,
     pair_album_matches_filters,
     pair_has_pending_initial_scan,
+    pair_keyword_allows_album,
+    pair_keyword_allows_message,
     pair_matches_filters,
     should_skip_album_forwarded,
     should_skip_forwarded,
@@ -86,11 +88,20 @@ async def repost_single_message(
             update_last_processed(user_id, pair, msg_id)
             return False
     else:
-        # preview post အတွက် post_rule / keyword filter မစစ်ဘူး
-        # forward_rule ON + forwarded ဖြစ်တာပဲ skip လုပ်မယ်
+        # preview post အတွက် post_rule(video-only) ကို bypass လုပ်မယ်
+        # ဒါပေမယ့် forward_rule နဲ့ keyword filter ကိုတော့ ဆက်စစ်မယ်
         if should_skip_forwarded(pair, msg):
             logger.info(
                 "Skipping preview message %s for pair %s because it is forwarded",
+                msg_id,
+                pair_id,
+            )
+            update_last_processed(user_id, pair, msg_id)
+            return False
+
+        if not pair_keyword_allows_message(pair, msg):
+            logger.info(
+                "Skipping preview message %s for pair %s due to keyword filter",
                 msg_id,
                 pair_id,
             )
@@ -151,11 +162,20 @@ async def repost_album(
             update_last_processed(user_id, pair, max(msg_ids))
             return False
     else:
-        # preview album အတွက် post_rule / keyword filter မစစ်ဘူး
-        # forward_rule ON + forwarded ပါရင်ပဲ skip
+        # preview album အတွက် post_rule(video-only) ကို bypass လုပ်မယ်
+        # ဒါပေမယ့် forward_rule နဲ့ keyword filter ကိုတော့ ဆက်စစ်မယ်
         if should_skip_album_forwarded(pair, album_messages):
             logger.info(
                 "Skipping preview album %s for pair %s because it is forwarded",
+                grouped_id,
+                pair_id,
+            )
+            update_last_processed(user_id, pair, max(msg_ids))
+            return False
+
+        if not pair_keyword_allows_album(pair, album_messages):
+            logger.info(
+                "Skipping preview album %s for pair %s due to keyword filter",
                 grouped_id,
                 pair_id,
             )
